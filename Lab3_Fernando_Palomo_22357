@@ -1,0 +1,145 @@
+// Lab3_Fernando_Palomo_22357
+// Laboratorio 3 finalizado
+;------------------------------------------------------------------------------
+; Encabezado
+;------------------------------------------------------------------------------
+; Universidad del valle de Guatemala
+; IE2023 Programación de Microcontroladores
+; Author : Fernando José Pérez Palomo - 22357
+; Proyecto: Laboratorio_3.asm
+; Descripción: Contador de decenas y unidades de tiempo con 2 display y contador de 4 bits usando leds (utilizando interrupciones)
+; Hardware: ATMega328P 
+
+.include "M328PDEF.inc"   ; Incluye el archivo de definiciones para el ATmega328P
+
+.cseg                      ; Sección de código
+.org 0x00                  ; Origen del vector de reinicio
+    JMP SETUP              ; Salto a la etiqueta SETUP
+.org 0x0008                ; Origen del vector de interrupción externa INT0
+    JMP ISR_PCINT0
+.org 0x0020                ; Origen del vector de interrupción del Timer/Counter0 overflow
+    JMP TIMER0_OVR
+
+TABLA7SEG: .DB 0b0100_0000, 0b0111_1001, 0b0010_0100, 0b0011_0000, 0b0001_1001, 0b0001_0010, 0b0000_0010, 0b0111_1000, 0b0000_0000, 0b0001_1000 ; Tabla de 7 segmentos
+
+SETUP:
+    ; Configuración de la pila y otras inicializaciones aquí
+
+    ; Configuración del prescaler para 16 MHz / 16 = 1 MHz
+    LDI R16, (1 << CLKPCE)   ; Habilita la escritura en el registro de prescaler
+    STS CLKPR, R16            ; Almacena el valor en el registro de prescaler
+    LDI R16, 0b00000110       ; Configura el prescaler para 1 MHz
+    STS CLKPR, R16            ; Almacena la configuración del prescaler
+
+    ; Configuración de puertos
+    LDI R16, 0b00000000       ; Inicializa R16 con 0
+    OUT PORTD, R16            ; Configura el puerto D como salida
+    STS UCSR0B, R16           ; Deshabilita el módulo USART
+    LDI R16, 0b1100_1100      ; Configura R16 para la configuración de pines de entrada en DDRC
+    OUT DDRC, R16             ; Configuramos los pines como entrada
+    LDI R16, 0b00000011       ; Configura R16 para habilitar pull-up en los botones en PORTC
+    OUT PORTC, R16            ; Habilita pull-up en los botones
+    LDI R16, 0b01111111       ; Configura R16 para todos los pines de salida en DDRD
+    OUT DDRD, R16             ; Configuramos los pines como salida
+    LDI R16, 0b11111111       ; Configura R16 para todos los pines de salida en DDRB
+    OUT DDRB, R16             ; Configuramos los pines como salida
+    CALL Timer0              ; Llama a la configuración del Timer0
+    LDI R16, 0b00000011       ; Configura R16 para los pines habilitados en PCMSK1
+    STS PCMSK1, R16           ; Configura el registro de máscara de cambio de pin para habilitar interrupciones en PCINT
+    LDI R16, (1 << PCIE1)     ; Configura R16 para habilitar interrupciones en PCIE1
+    STS PCICR, R16            ; Habilita las interrupciones de cambio de pin para el puerto C
+    LDI R16, (1 << TOIE0)     ; Configura R16 para habilitar interrupciones por desbordamiento en Timer0
+    STS TIMSK0, R16           ; Habilita la interrupción por desbordamiento en Timer0
+    SEI                       ; Habilita las interrupciones globales
+
+    LDI R17, 0                ; Inicializa R17 con 0
+    LDI R19, 0                ; Inicializa R19 con 0
+    LDI R24, 0                ; Inicializa R24 con 0
+
+
+LOOP:
+    LDI ZH, HIGH(TABLA7SEG << 1) ; Carga el byte alto de la dirección de la tabla de 7 segmentos
+    LDI ZL, LOW(TABLA7SEG << 1)  ; Carga el byte bajo de la dirección de la tabla de 7 segmentos
+    ADD ZL, R19                  ; Suma R17 al byte bajo de la dirección de la tabla de 7 segmentos
+    LPM R22, Z                   ; Lee el byte de la tabla de 7 segmentos en la dirección calculada
+    OUT PORTD, R22               ; Muestra el valor en el puerto D
+    LDI R30, 0b0000_0111         ; Carga R30 con el valor binario 0000_0111
+    LDI R31, 0b0000_0011         ; Carga R31 con el valor binario 0000_0011
+    OUT PORTC, R30               ; Muestra el valor de R30 en el puerto C
+    OUT PORTC, R31               ; Muestra el valor de R31 en el puerto C
+
+    LDI ZH, HIGH(TABLA7SEG << 1) ; Carga el byte alto de la dirección de la tabla de 7 segmentos
+    LDI ZL, LOW(TABLA7SEG << 1)  ; Carga el byte bajo de la dirección de la tabla de 7 segmentos
+    ADD ZL, R24                  ; Suma R17 al byte bajo de la dirección de la tabla de 7 segmentos
+    LPM R23, Z                   ; Lee el byte de la tabla de 7 segmentos en la dirección calculada
+    OUT PORTD, R23               ; Muestra el valor en el puerto D SEGUNDO DISPLAY
+    LDI R29, 0b0000_1011         ; Carga R29 con el valor binario 0000_1011
+    LDI R31, 0b0000_0011         ; Carga R31 con el valor binario 0000_0011
+    OUT PORTC, R29               ; Muestra el valor de R29 en el puerto C
+    OUT PORTC, R31               ; Muestra el valor de R31 en el puerto C
+    OUT PORTB, R20               ; Muestra el valor de R20 en el puerto B
+
+    RJMP LOOP                    ; Salto incondicional de nuevo al bucle LOOP
+
+
+
+ISR_PCINT0:
+    PUSH R16                      ; Almacena R16 en la pila
+    IN R16, SREG                  ; Lee el registro de estado y almacena en R16
+    PUSH R16                      ; Almacena R16 en la pila
+
+    IN R18, PINC                   ; Lee el estado actual de los pines del puerto C
+    SBRS R18, PC0                   ; Salta si el bit PC0 ha cambiado
+    RJMP CHECKPC1                  ; Salta a la etiqueta CHECKPC1
+    SBRS R18, PC1                   ; Salta si el bit PC1 ha cambiado
+    RJMP CHECKPC0                  ; Salta a la etiqueta CHECKPC0
+    RJMP INTERR                    ; Salta a la etiqueta INTERR si no se cumplen las condiciones anteriores
+
+CHECKPC1:
+    SBRS R18, PC1                  ; Salta si el bit PC1 ha cambiado
+    JMP INTERR                     ; Salta a la etiqueta INTERR
+    DEC R20                        ; Decrementa R20 (variable de control)
+    RJMP INTERR                    ; Salta a la etiqueta INTERR
+
+CHECKPC0:
+    SBRS R18, PC0                  ; Salta si el bit PC0 ha cambiado
+    JMP INTERR                     ; Salta a la etiqueta INTERR
+    INC R20                        ; Incrementa R20 (variable de control)
+    RJMP INTERR                    ; Salta a la etiqueta INTERR
+
+INTERR:
+    SBI PCIFR, PCIF1               ; Limpia la bandera de interrupción del cambio de pin para el puerto C
+    POP R16                        ; Restaura R16 desde la pila
+    OUT SREG, R16                  ; Restaura el registro de estado desde R16
+    POP R16                        ; Restaura R16 desde la pila
+    RETI                            ; Retorna de la interrupción
+
+TIMER0_OVR:
+    INC R19                        ; Incrementa el contador
+    CPI R19, 10                    ; Compara si el contador ha alcanzado el límite
+    BREQ DISP_RESET                ; Salta a la etiqueta DISP_RESET si el contador ha alcanzado el límite
+    RJMP CONTINUE_COUNT            ; Salta a la etiqueta CONTINUE_COUNT
+
+DISP_RESET:
+    LDI R19, 0                     ; Reinicia el contador
+    INC R24                        ; Incrementa R24 (variable de control)
+    CPI R24, 6                     ; Compara si R24 ha alcanzado el límite
+    BREQ DISP_RESET2               ; Salta a la etiqueta DISP_RESET2 si R24 ha alcanzado el límite
+    RETI                           ; Retorna de la interrupción
+
+DISP_RESET2:
+    LDI R24, 0                     ; Reinicia R24
+    RETI                           ; Retorna de la interrupción
+
+CONTINUE_COUNT:
+    SBI TIFR0, TOV0                 ; Limpia la bandera de overflow del Timer/Counter0
+    RETI                            ; Retorna de la interrupción
+
+; Inicio de Timer 0
+Timer0:
+    LDI R16, (1 << CS02) | (1 << CS00)  ; Configura el prescaler a 1024
+    OUT TCCR0B, R16
+
+    LDI R16, 100                           ; Carga el valor de desbordamiento
+    OUT TCNT0, R16                          ; Carga el valor inicial del contador
+    RET                                   ; Retorna de la subrutina
